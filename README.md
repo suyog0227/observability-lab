@@ -165,14 +165,5 @@ OTLP/gRPC: CENTRAL_VM_IP:4317
 OTLP/HTTP: http://CENTRAL_VM_IP:4318/v1/traces
 ```
 
-## Current Limitations
-
-- Single-node deployment
-- Local filesystem storage
-- No high availability
-- No MinIO or external object storage
-- No Alertmanager
-- No TLS termination
-- Loki authentication is disabled
 
 Protect the deployment using Azure NSG, firewall, routing, and company network controls.
