@@ -673,11 +673,15 @@ storage:
     local:
       path: ${TEMPO_DIR}/blocks
 
-compactor:
+backend_scheduler:
 
-  compaction:
+  provider:
 
-    block_retention: ${TEMPO_RETENTION}
+    compaction:
+
+      compaction:
+
+        block_retention: ${TEMPO_RETENTION}
 
 usage_report:
 
