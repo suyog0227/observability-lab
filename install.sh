@@ -1475,3 +1475,80 @@ USEFUL COMMANDS
 Check service status:
 
     systemctl status grafana-server
+
+    systemctl status prometheus
+
+    systemctl status prometheus-node-exporter
+
+    systemctl status loki
+
+    systemctl status tempo
+
+    systemctl status alloy
+
+
+Check failed services:
+
+    systemctl --failed
+
+
+View service logs:
+
+    journalctl -u grafana-server -n 100 --no-pager
+
+    journalctl -u prometheus -n 100 --no-pager
+
+    journalctl -u prometheus-node-exporter -n 100 --no-pager
+
+    journalctl -u loki -n 100 --no-pager
+
+    journalctl -u tempo -n 100 --no-pager
+
+    journalctl -u alloy -n 100 --no-pager
+
+
+View installation log:
+
+    less ${INSTALL_LOG}
+
+
+Check storage growth:
+
+    du -sh /var/lib/prometheus /var/lib/loki /data/tempo /var/lib/grafana
+
+    df -h /
+
+
+============================================================
+
+EOF
+
+
+# ============================================================
+# FINAL RESULT
+# ============================================================
+
+if [[ "$FAILED" -ne 0 ]]; then
+
+    echo
+    echo "One or more verification checks failed."
+    echo
+    echo "Review the service logs displayed above."
+    echo
+    echo "Installation log:"
+    echo
+    echo "${INSTALL_LOG}"
+    echo
+
+    exit 1
+
+fi
+
+
+echo
+echo "All observability services passed verification."
+echo
+echo "Installation completed successfully."
+echo
+
+exit 0
