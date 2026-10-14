@@ -700,9 +700,8 @@ if id tempo >/dev/null 2>&1; then
 fi
 
 
-tempo \
-    -config.file=/etc/tempo/config.yml \
-    -config.verify
+# Tempo 3.1 does not provide the legacy -config.verify flag.
+# Tempo configuration is validated when the service starts.
 
 echo "Tempo retention: ${TEMPO_RETENTION}"
 
