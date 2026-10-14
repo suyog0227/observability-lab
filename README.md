@@ -1,4 +1,4 @@
-# Native Central Observability Stack
+# Observability Stack Installation
 
 Automated installation of a centralized observability stack on Ubuntu 24.04 using native systemd services.
 
