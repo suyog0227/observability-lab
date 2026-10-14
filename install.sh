@@ -12,57 +12,13 @@
 #   - Grafana Alloy
 #   - Grafana Tempo
 #
-# Architecture:
-#
-# METRICS
-# Node Exporter on VMs
-#       |
-#       v
-# Central Prometheus
-#       |
-#       v
-# Grafana
-#
-# LOGS
-# systemd/journald on VMs
-#       |
-#       v
-# Grafana Alloy on VMs
-#       |
-#       v
-# Central Loki
-#       |
-#       v
-# Grafana
-#
-# TRACES
-# Applications
-#       |
-#       v
-# OTLP
-#       |
-#       v
-# Central Grafana Alloy
-#       |
-#       v
-# Tempo
-#       |
-#       v
-# Grafana
+# Intended use:
+#   - Lab
+#   - POC
+#   - Low-ingestion performance test
 #
 # No Docker is used.
 # ============================================================
-
-
-# ------------------------------------------------------------
-# Exit immediately if:
-#
-# - a command fails
-# - an undefined variable is used
-# - a pipeline command fails
-#
-# ERR traps also propagate into functions and subshells.
-# ------------------------------------------------------------
 
 set -Eeuo pipefail
 
@@ -89,6 +45,16 @@ export DEBIAN_FRONTEND=noninteractive
 
 TEMPO_VERSION="${TEMPO_VERSION:-3.1.0}"
 
+# Storage retention defaults suitable for the current VM.
+LOKI_RETENTION="${LOKI_RETENTION:-72h}"
+
+TEMPO_RETENTION="${TEMPO_RETENTION:-72h}"
+
+PROMETHEUS_RETENTION_TIME="${PROMETHEUS_RETENTION_TIME:-7d}"
+
+PROMETHEUS_RETENTION_SIZE="${PROMETHEUS_RETENTION_SIZE:-10GB}"
+
+
 LOKI_DIR="/var/lib/loki"
 
 TEMPO_DIR="/data/tempo"
@@ -114,38 +80,21 @@ INSTALL_LOG="/var/log/observability-install.log"
 # HELPER FUNCTIONS
 # ============================================================
 
-
-# ------------------------------------------------------------
-# Print a section heading.
-# ------------------------------------------------------------
-
 log() {
     printf '\n\033[1;34m==> %s\033[0m\n' "$*"
 }
 
-
-# ------------------------------------------------------------
-# Print a warning.
-# ------------------------------------------------------------
 
 warn() {
     printf '\n\033[1;33mWARNING: %s\033[0m\n' "$*" >&2
 }
 
 
-# ------------------------------------------------------------
-# Print an error and exit.
-# ------------------------------------------------------------
-
 fail() {
     printf '\n\033[1;31mERROR: %s\033[0m\n' "$*" >&2
     exit 1
 }
 
-
-# ------------------------------------------------------------
-# Print useful information when an unexpected error occurs.
-# ------------------------------------------------------------
 
 on_error() {
     local exit_code=$?
@@ -160,7 +109,11 @@ on_error() {
     echo
     echo "less ${INSTALL_LOG}"
     echo
-    echo "Useful service troubleshooting commands:"
+    echo "Check failed systemd services:"
+    echo
+    echo "systemctl --failed"
+    echo
+    echo "Useful troubleshooting commands:"
     echo
     echo "journalctl -u grafana-server -n 100 --no-pager"
     echo "journalctl -u prometheus -n 100 --no-pager"
@@ -176,16 +129,6 @@ on_error() {
 
 trap 'on_error $LINENO' ERR
 
-
-# ------------------------------------------------------------
-# Wait for an HTTP endpoint to become ready.
-#
-# Arguments:
-#
-# $1 = friendly service name
-# $2 = URL
-# $3 = number of attempts
-# ------------------------------------------------------------
 
 wait_url() {
     local name="$1"
@@ -212,10 +155,23 @@ wait_url() {
 }
 
 
-# ------------------------------------------------------------
-# Save all installer output while still showing it in the
-# browser terminal.
-# ------------------------------------------------------------
+backup_file() {
+    local file="$1"
+
+    if [[ -f "$file" && ! -f "${file}.original" ]]; then
+        cp \
+            -a \
+            "$file" \
+            "${file}.original"
+    fi
+
+    return 0
+}
+
+
+# ============================================================
+# INSTALLATION LOG
+# ============================================================
 
 touch "$INSTALL_LOG"
 
@@ -284,7 +240,7 @@ if (( MEMORY_MB < 6000 )); then
 fi
 
 if (( ROOT_FREE_MB < 20000 )); then
-    warn "At least 20 GB of available disk is recommended."
+    fail "At least 20 GB of available root filesystem space is required."
 fi
 
 
@@ -360,18 +316,14 @@ apt-get update
 
 # Verify required packages are available.
 
-apt-cache show grafana >/dev/null 2>&1 ||
-    fail "Grafana package was not found."
-
-apt-cache show loki >/dev/null 2>&1 ||
-    fail "Loki package was not found."
-
-apt-cache show alloy >/dev/null 2>&1 ||
-    fail "Grafana Alloy package was not found."
+for package in grafana loki alloy; do
+    apt-cache show "$package" >/dev/null 2>&1 ||
+        fail "Package was not found: ${package}"
+done
 
 
 # ============================================================
-# STEP 6 - INSTALL CORE OBSERVABILITY COMPONENTS
+# STEP 6 - INSTALL CORE COMPONENTS
 # ============================================================
 
 log "Installing Grafana, Prometheus, Node Exporter, Loki and Alloy"
@@ -467,11 +419,7 @@ install \
     -m 0755 \
     "$PROMETHEUS_FILE_SD_DIR"
 
-cp \
-    -n \
-    /etc/prometheus/prometheus.yml \
-    /etc/prometheus/prometheus.yml.original \
-    2>/dev/null || true
+backup_file /etc/prometheus/prometheus.yml
 
 
 cat > /etc/prometheus/prometheus.yml <<'EOF'
@@ -482,7 +430,6 @@ global:
 
 scrape_configs:
 
-  # Prometheus monitors itself.
   - job_name: "prometheus"
 
     static_configs:
@@ -493,7 +440,6 @@ scrape_configs:
           environment: "observability"
           role: "prometheus"
 
-  # Node Exporter running on the central observability VM.
   - job_name: "central-observability-node"
 
     static_configs:
@@ -504,13 +450,6 @@ scrape_configs:
           environment: "observability"
           role: "central-server"
 
-  # Remote Linux machines.
-  #
-  # Targets are read from:
-  #
-  # /etc/prometheus/file_sd/linux-nodes.yml
-  #
-  # Prometheus automatically refreshes this file.
   - job_name: "remote-linux-nodes"
 
     file_sd_configs:
@@ -520,8 +459,6 @@ scrape_configs:
         refresh_interval: 30s
 EOF
 
-
-# Create an empty valid remote-target file if it does not exist.
 
 if [[ ! -f "$PROMETHEUS_REMOTE_TARGETS_FILE" ]]; then
 
@@ -557,8 +494,6 @@ chmod \
     "$PROMETHEUS_REMOTE_TARGETS_FILE"
 
 
-# Validate Prometheus configuration.
-
 promtool \
     check \
     config \
@@ -566,7 +501,24 @@ promtool \
 
 
 # ============================================================
-# STEP 10 - CONFIGURE LOKI
+# STEP 10 - LIMIT PROMETHEUS STORAGE
+# ============================================================
+
+log "Configuring Prometheus storage retention"
+
+backup_file /etc/default/prometheus
+
+cat > /etc/default/prometheus <<EOF
+ARGS="--storage.tsdb.retention.time=${PROMETHEUS_RETENTION_TIME} --storage.tsdb.retention.size=${PROMETHEUS_RETENTION_SIZE}"
+EOF
+
+echo "Prometheus retention time: ${PROMETHEUS_RETENTION_TIME}"
+
+echo "Prometheus maximum TSDB size: ${PROMETHEUS_RETENTION_SIZE}"
+
+
+# ============================================================
+# STEP 11 - CONFIGURE LOKI
 # ============================================================
 
 log "Configuring Loki"
@@ -578,39 +530,18 @@ install \
     "$LOKI_DIR/rules" \
     "$LOKI_DIR/compactor"
 
-
-if id loki >/dev/null 2>&1; then
-
-    chown \
-        -R \
-        loki:"$(id -gn loki)" \
-        "$LOKI_DIR"
-
-fi
+backup_file /etc/loki/config.yml
 
 
-cp \
-    -n \
-    /etc/loki/config.yml \
-    /etc/loki/config.yml.original \
-    2>/dev/null || true
-
-
-cat > /etc/loki/config.yml <<'EOF'
-# Authentication is disabled for this internal lab.
-#
-# Access to TCP 3100 must be restricted through Azure NSG,
-# the host firewall or another company network control.
+cat > /etc/loki/config.yml <<EOF
 auth_enabled: false
 
 server:
 
-  # Allow approved remote Alloy agents to send logs.
   http_listen_address: 0.0.0.0
 
   http_listen_port: 3100
 
-  # Keep Loki's internal gRPC port local.
   grpc_listen_address: 127.0.0.1
 
   grpc_listen_port: 9096
@@ -621,8 +552,6 @@ common:
 
   ring:
 
-    # This is Loki's internal ring address.
-    # It must not be changed to 0.0.0.0.
     instance_addr: 127.0.0.1
 
     kvstore:
@@ -630,7 +559,7 @@ common:
 
   replication_factor: 1
 
-  path_prefix: /var/lib/loki
+  path_prefix: ${LOKI_DIR}
 
 schema_config:
 
@@ -651,11 +580,11 @@ schema_config:
 storage_config:
 
   filesystem:
-    directory: /var/lib/loki/chunks
+    directory: ${LOKI_DIR}/chunks
 
 compactor:
 
-  working_directory: /var/lib/loki/compactor
+  working_directory: ${LOKI_DIR}/compactor
 
   retention_enabled: true
 
@@ -663,8 +592,7 @@ compactor:
 
 limits_config:
 
-  # Seven-day log retention for this test environment.
-  retention_period: 168h
+  retention_period: ${LOKI_RETENTION}
 
   allow_structured_metadata: true
 
@@ -684,19 +612,15 @@ if id loki >/dev/null 2>&1; then
 fi
 
 
-# Validate Loki configuration.
+loki \
+    -config.file=/etc/loki/config.yml \
+    -verify-config=true
 
-if command -v loki >/dev/null 2>&1; then
-
-    loki \
-        -config.file=/etc/loki/config.yml \
-        -verify-config=true
-
-fi
+echo "Loki retention: ${LOKI_RETENTION}"
 
 
 # ============================================================
-# STEP 11 - CONFIGURE TEMPO
+# STEP 12 - CONFIGURE TEMPO
 # ============================================================
 
 log "Configuring Tempo"
@@ -709,23 +633,7 @@ install \
     "$TEMPO_DIR/blocks" \
     "$TEMPO_RUNTIME_DIR"
 
-
-if id tempo >/dev/null 2>&1; then
-
-    chown \
-        -R \
-        tempo:"$(id -gn tempo)" \
-        "$TEMPO_DIR" \
-        "$TEMPO_RUNTIME_DIR"
-
-fi
-
-
-cp \
-    -n \
-    /etc/tempo/config.yml \
-    /etc/tempo/config.yml.original \
-    2>/dev/null || true
+backup_file /etc/tempo/config.yml
 
 
 cat > /etc/tempo/config.yml <<EOF
@@ -733,7 +641,6 @@ stream_over_http_enabled: true
 
 server:
 
-  # Tempo is queried by Grafana on the same VM.
   http_listen_address: 127.0.0.1
 
   http_listen_port: 3200
@@ -748,15 +655,9 @@ distributor:
 
       protocols:
 
-        # Internal gRPC receiver.
-        #
-        # Remote applications send to Alloy on port 4317.
         grpc:
           endpoint: "127.0.0.1:${TEMPO_INTERNAL_OTLP_GRPC_PORT}"
 
-        # Internal HTTP receiver used by Alloy.
-        #
-        # Remote applications send to Alloy on port 4318.
         http:
           endpoint: "127.0.0.1:${TEMPO_INTERNAL_OTLP_HTTP_PORT}"
 
@@ -767,17 +668,16 @@ storage:
     backend: local
 
     wal:
-      path: /data/tempo/wal
+      path: ${TEMPO_DIR}/wal
 
     local:
-      path: /data/tempo/blocks
+      path: ${TEMPO_DIR}/blocks
 
 compactor:
 
   compaction:
 
-    # Seven-day trace retention.
-    block_retention: 168h
+    block_retention: ${TEMPO_RETENTION}
 
 usage_report:
 
@@ -796,45 +696,30 @@ if id tempo >/dev/null 2>&1; then
 fi
 
 
-# Validate Tempo configuration.
-
 tempo \
     -config.file=/etc/tempo/config.yml \
     -config.verify
 
+echo "Tempo retention: ${TEMPO_RETENTION}"
+
 
 # ============================================================
-# STEP 12 - CONFIGURE GRAFANA ALLOY
+# STEP 13 - CONFIGURE GRAFANA ALLOY
 # ============================================================
 
 log "Configuring Grafana Alloy"
-
-# Allow Alloy to read systemd journal entries.
 
 usermod \
     -aG systemd-journal \
     alloy
 
-
-cp \
-    -n \
-    /etc/alloy/config.alloy \
-    /etc/alloy/config.alloy.original \
-    2>/dev/null || true
+backup_file /etc/alloy/config.alloy
 
 
 cat > /etc/alloy/config.alloy <<EOF
 //
 // ==========================================================
 // LOCAL LOG PIPELINE
-//
-// Central VM systemd journal
-//          |
-//          v
-//        Alloy
-//          |
-//          v
-//         Loki
 // ==========================================================
 //
 
@@ -879,16 +764,6 @@ loki.write "local" {
 //
 // ==========================================================
 // CENTRAL TRACE PIPELINE
-//
-// Local or remote application
-//          |
-//          | OTLP/gRPC port ${ALLOY_OTLP_GRPC_PORT}
-//          | OTLP/HTTP port ${ALLOY_OTLP_HTTP_PORT}
-//          v
-//        Alloy
-//          |
-//          v
-//        Tempo
 // ==========================================================
 //
 
@@ -931,15 +806,13 @@ otelcol.exporter.otlphttp "tempo" {
 EOF
 
 
-# Validate Alloy configuration.
-
 alloy \
     validate \
     /etc/alloy/config.alloy
 
 
 # ============================================================
-# STEP 13 - CONFIGURE GRAFANA DATA SOURCES
+# STEP 14 - CONFIGURE GRAFANA DATA SOURCES
 # ============================================================
 
 log "Provisioning Grafana data sources"
@@ -1058,19 +931,13 @@ chmod \
 
 
 # ============================================================
-# STEP 14 - CONFIGURE GRAFANA NETWORK LISTENER
+# STEP 15 - CONFIGURE GRAFANA NETWORK LISTENER
 # ============================================================
 
 log "Configuring Grafana network listener"
 
-cp \
-    -n \
-    /etc/grafana/grafana.ini \
-    /etc/grafana/grafana.ini.original \
-    2>/dev/null || true
+backup_file /etc/grafana/grafana.ini
 
-
-# Configure Grafana to listen on all VM interfaces.
 
 if grep \
     -Eq \
@@ -1103,11 +970,17 @@ if grep \
         's/^[;[:space:]]*http_port[[:space:]]*=.*$/http_port = 3000/' \
         /etc/grafana/grafana.ini
 
+else
+
+    cat >> /etc/grafana/grafana.ini <<'EOF'
+http_port = 3000
+EOF
+
 fi
 
 
 # ============================================================
-# STEP 15 - LIMIT SYSTEMD JOURNAL STORAGE
+# STEP 16 - LIMIT SYSTEMD JOURNAL STORAGE
 # ============================================================
 
 log "Limiting journald disk usage"
@@ -1121,13 +994,10 @@ install \
 cat > /etc/systemd/journald.conf.d/observability.conf <<'EOF'
 [Journal]
 
-# Limit systemd journal storage to 1 GB.
 SystemMaxUse=1G
 
-# Preserve at least 5 GB of free disk.
 SystemKeepFree=5G
 
-# Compress older journal files.
 Compress=yes
 EOF
 
@@ -1138,7 +1008,7 @@ systemctl \
 
 
 # ============================================================
-# STEP 16 - CHECK LOCAL FIREWALL
+# STEP 17 - CHECK LOCAL FIREWALL
 # ============================================================
 
 log "Checking local firewall"
@@ -1158,9 +1028,9 @@ if command -v ufw >/dev/null 2>&1; then
 
         warn "UFW is active."
 
-        warn "The installer will not modify company firewall policy automatically."
+        warn "The installer will not modify company firewall policy."
 
-        warn "Request approved access for TCP 3000, 3100, 4317 and 4318."
+        warn "Allow only approved sources to TCP 3000, 3100, 4317 and 4318."
 
     fi
 
@@ -1179,7 +1049,7 @@ TCP 3000:
     Grafana access from approved administrator networks.
 
 TCP 3100:
-    Loki log ingestion from Alloy agents.
+    Loki ingestion from approved remote Alloy agents.
 
 TCP 4317:
     OTLP/gRPC trace ingestion.
@@ -1202,7 +1072,7 @@ EOF
 
 
 # ============================================================
-# STEP 17 - ENABLE SERVICES
+# STEP 18 - ENABLE SERVICES
 # ============================================================
 
 log "Enabling observability services"
@@ -1221,7 +1091,7 @@ systemctl enable \
 
 
 # ============================================================
-# STEP 18 - START SERVICES
+# STEP 19 - START SERVICES
 # ============================================================
 
 log "Starting Node Exporter"
@@ -1248,7 +1118,8 @@ systemctl \
 wait_url \
     "Loki startup" \
     "http://127.0.0.1:3100/ready" \
-    60 || true
+    120 ||
+    fail "Loki did not become ready within 120 seconds."
 
 
 log "Starting Tempo"
@@ -1261,7 +1132,8 @@ systemctl \
 wait_url \
     "Tempo startup" \
     "http://127.0.0.1:3200/ready" \
-    60 || true
+    120 ||
+    fail "Tempo did not become ready within 120 seconds."
 
 
 log "Starting Grafana Alloy"
@@ -1279,7 +1151,7 @@ systemctl \
 
 
 # ============================================================
-# STEP 19 - VERIFY SERVICES
+# STEP 20 - VERIFY SERVICES
 # ============================================================
 
 log "Verifying systemd services"
@@ -1333,7 +1205,7 @@ done
 
 
 # ============================================================
-# STEP 20 - VERIFY HTTP ENDPOINTS
+# STEP 21 - VERIFY HTTP ENDPOINTS
 # ============================================================
 
 log "Verifying endpoints"
@@ -1375,7 +1247,7 @@ wait_url \
 
 
 # ============================================================
-# STEP 21 - DISPLAY LISTENING PORTS
+# STEP 22 - DISPLAY LISTENING PORTS
 # ============================================================
 
 log "Listening ports"
@@ -1389,7 +1261,29 @@ ss \
 
 
 # ============================================================
-# STEP 22 - DETERMINE CENTRAL VM IP
+# STEP 23 - DISPLAY STORAGE USAGE
+# ============================================================
+
+log "Observability storage usage"
+
+du \
+    -sh \
+    /var/lib/prometheus \
+    /var/lib/loki \
+    /data/tempo \
+    /var/lib/grafana \
+    2>/dev/null ||
+    true
+
+echo
+
+df \
+    -h \
+    /
+
+
+# ============================================================
+# STEP 24 - DETERMINE CENTRAL VM IP
 # ============================================================
 
 PRIMARY_IP="$(
@@ -1401,7 +1295,7 @@ PRIMARY_IP="${PRIMARY_IP:-OBSERVABILITY_SERVER_IP}"
 
 
 # ============================================================
-# STEP 23 - PRINT COMPLETION INFORMATION
+# STEP 25 - PRINT COMPLETION INFORMATION
 # ============================================================
 
 cat <<EOF
@@ -1415,73 +1309,88 @@ Central observability server:
 
     ${PRIMARY_IP}
 
-Native Linux services were installed.
-
 No Docker was used.
 
 
 ------------------------------------------------------------
-COMPONENT PORTS
+COMPONENT ENDPOINTS
 ------------------------------------------------------------
 
 Grafana:
 
-    ${PRIMARY_IP}:3000
+    http://${PRIMARY_IP}:3000
 
 Prometheus:
 
-    ${PRIMARY_IP}:9090
+    http://${PRIMARY_IP}:9090
 
 Node Exporter:
 
-    ${PRIMARY_IP}:9100
+    http://${PRIMARY_IP}:9100/metrics
 
 Loki ingestion:
 
-    ${PRIMARY_IP}:3100
+    http://${PRIMARY_IP}:3100/loki/api/v1/push
 
 Tempo query API:
 
-    127.0.0.1:3200
+    http://127.0.0.1:3200
 
 Alloy OTLP/gRPC:
 
     ${PRIMARY_IP}:${ALLOY_OTLP_GRPC_PORT}
 
-Alloy OTLP/HTTP:
+Alloy OTLP/HTTP base endpoint:
 
-    ${PRIMARY_IP}:${ALLOY_OTLP_HTTP_PORT}
+    http://${PRIMARY_IP}:${ALLOY_OTLP_HTTP_PORT}
 
-Internal Tempo OTLP/HTTP:
+Alloy OTLP/HTTP trace endpoint:
 
-    127.0.0.1:${TEMPO_INTERNAL_OTLP_HTTP_PORT}
+    http://${PRIMARY_IP}:${ALLOY_OTLP_HTTP_PORT}/v1/traces
 
-Internal Tempo OTLP/gRPC:
 
-    127.0.0.1:${TEMPO_INTERNAL_OTLP_GRPC_PORT}
+------------------------------------------------------------
+RETENTION SETTINGS
+------------------------------------------------------------
+
+Prometheus retention time:
+
+    ${PROMETHEUS_RETENTION_TIME}
+
+Prometheus maximum storage:
+
+    ${PROMETHEUS_RETENTION_SIZE}
+
+Loki retention:
+
+    ${LOKI_RETENTION}
+
+Tempo retention:
+
+    ${TEMPO_RETENTION}
 
 
 ------------------------------------------------------------
 GRAFANA ACCESS
 ------------------------------------------------------------
 
-Open Grafana from a workstation that has network access:
+Open Grafana from an approved workstation:
 
     http://${PRIMARY_IP}:3000
 
-Initial login:
+If the default credentials are still enabled:
 
     Username: admin
     Password: admin
 
-Change the administrator password immediately after logging in.
+Change the administrator password immediately.
 
 
 ------------------------------------------------------------
 GRAFANA DATA SOURCES
 ------------------------------------------------------------
 
-The following data sources were automatically provisioned:
+The following data sources were provisioned:
 
     Prometheus
     Loki
@@ -1492,9 +1401,7 @@ The following data sources were automatically provisioned:
 PROMETHEUS REMOTE NODE CONFIGURATION
 ------------------------------------------------------------
 
-Install Node Exporter on each monitored Linux VM.
-
-Then edit this file on the central observability server:
+Edit:
 
     ${PROMETHEUS_REMOTE_TARGETS_FILE}
 
@@ -1507,7 +1414,7 @@ Example:
         environment: "test"
         location: "azure"
 
-Prometheus detects changes to this file automatically.
+Prometheus automatically detects changes to the file.
 
 Verify remote targets at:
 
@@ -1518,85 +1425,26 @@ Verify remote targets at:
 REMOTE LOG INGESTION
 ------------------------------------------------------------
 
-Install and configure Grafana Alloy on each monitored VM.
-
 Remote Alloy agents should send logs to:
 
     http://${PRIMARY_IP}:3100/loki/api/v1/push
 
-Example Loki query in Grafana Explore:
+Example Loki query:
 
     {job="systemd-journal"}
-
-Remote Alloy agents should add a host label to every log stream.
 
 
 ------------------------------------------------------------
 REMOTE TRACE INGESTION
 ------------------------------------------------------------
 
-Applications and OpenTelemetry agents can send traces using:
-
 OTLP/gRPC:
 
     ${PRIMARY_IP}:${ALLOY_OTLP_GRPC_PORT}
 
-OTLP/HTTP base endpoint:
-
-    http://${PRIMARY_IP}:${ALLOY_OTLP_HTTP_PORT}
-
-OTLP/HTTP trace endpoint:
+OTLP/HTTP:
 
     http://${PRIMARY_IP}:${ALLOY_OTLP_HTTP_PORT}/v1/traces
-
-
-The trace path is:
-
-Application
-    |
-    v
-OpenTelemetry SDK or agent
-    |
-    v
-Central Grafana Alloy
-    |
-    v
-Grafana Tempo
-    |
-    v
-Grafana
-
-
-------------------------------------------------------------
-METRIC PIPELINE
-------------------------------------------------------------
-
-Linux VM
-    |
-    v
-Node Exporter
-    |
-    v
-Central Prometheus
-    |
-    v
-Grafana
-
-
-------------------------------------------------------------
-LOG PIPELINE
-------------------------------------------------------------
-
-Linux VM systemd/journald
-    |
-    v
-Remote Grafana Alloy
-    |
-    v
-Central Loki
-    |
-    v
-Grafana
 
 
 ------------------------------------------------------------
@@ -1613,85 +1461,17 @@ Permit only approved source networks:
 
     TCP 4318 - OTLP/HTTP clients
 
-Permit the central observability VM to connect to monitored VMs:
+Permit the central server to reach monitored VMs:
 
     TCP 9100 - Node Exporter
 
-Do not expose these ports directly to the public internet.
-
-Both Azure NSG rules and operating-system firewall rules may
-affect connectivity.
+Do not expose these services directly to the public internet.
 
 
 ------------------------------------------------------------
 USEFUL COMMANDS
 ------------------------------------------------------------
 
-Check service statuses:
+Check service status:
 
     systemctl status grafana-server
-
-    systemctl status prometheus
-
-    systemctl status prometheus-node-exporter
-
-    systemctl status loki
-
-    systemctl status tempo
-
-    systemctl status alloy
-
-
-View service logs:
-
-    journalctl -u grafana-server -n 100 --no-pager
-
-    journalctl -u prometheus -n 100 --no-pager
-
-    journalctl -u prometheus-node-exporter -n 100 --no-pager
-
-    journalctl -u loki -n 100 --no-pager
-
-    journalctl -u tempo -n 100 --no-pager
-
-    journalctl -u alloy -n 100 --no-pager
-
-
-View installation log:
-
-    less ${INSTALL_LOG}
-
-
-============================================================
-
-EOF
-
-
-# ============================================================
-# FINAL RESULT
-# ============================================================
-
-if [[ "$FAILED" -ne 0 ]]; then
-
-    echo
-    echo "One or more verification checks failed."
-    echo
-    echo "Review the service logs displayed above."
-    echo
-    echo "Installation log:"
-    echo
-    echo "${INSTALL_LOG}"
-    echo
-
-    exit 1
-
-fi
-
-
-echo
-echo "All observability services passed verification."
-echo
-echo "Installation completed successfully."
-echo
-
-exit 0
