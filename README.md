@@ -1,6 +1,6 @@
 # Native Central Observability Stack
 
-Automated installation of a centralized observability stack on Ubuntu 24.04 using native systemd services. Docker is not required.
+Automated installation of a centralized observability stack on Ubuntu 24.04 using native systemd services.
 
 ## Objective
 
