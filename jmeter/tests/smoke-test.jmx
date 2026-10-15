@@ -1,161 +1,76 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <jmeterTestPlan version="1.2" properties="5.0" jmeter="5.6.3">
-
   <hashTree>
-
-    <TestPlan guiclass="TestPlanGui"
-              testclass="TestPlan"
-              testname="Grafana Health Smoke Test"
-              enabled="true">
-
-      <stringProp name="TestPlan.comments">
-        Single-user smoke test for the local Grafana health endpoint.
-      </stringProp>
-
+    <TestPlan guiclass="TestPlanGui" testclass="TestPlan" testname="Grafana Health Smoke Test" enabled="true">
+      <stringProp name="TestPlan.comments">Single-user smoke test for the local Grafana health endpoint.</stringProp>
       <boolProp name="TestPlan.functional_mode">false</boolProp>
-
       <boolProp name="TestPlan.serialize_threadgroups">false</boolProp>
-
-      <elementProp name="TestPlan.user_defined_variables"
-                   elementType="Arguments"
-                   guiclass="ArgumentsPanel"
-                   testclass="Arguments"
-                   testname="User Defined Variables"
-                   enabled="true">
-
+      <elementProp name="TestPlan.user_defined_variables" elementType="Arguments" guiclass="ArgumentsPanel" testclass="Arguments" testname="User Defined Variables" enabled="true">
         <collectionProp name="Arguments.arguments">
-
           <elementProp name="protocol" elementType="Argument">
             <stringProp name="Argument.name">protocol</stringProp>
             <stringProp name="Argument.value">http</stringProp>
             <stringProp name="Argument.metadata">=</stringProp>
           </elementProp>
-
           <elementProp name="host" elementType="Argument">
             <stringProp name="Argument.name">host</stringProp>
             <stringProp name="Argument.value">127.0.0.1</stringProp>
             <stringProp name="Argument.metadata">=</stringProp>
           </elementProp>
-
           <elementProp name="port" elementType="Argument">
             <stringProp name="Argument.name">port</stringProp>
             <stringProp name="Argument.value">3000</stringProp>
             <stringProp name="Argument.metadata">=</stringProp>
           </elementProp>
-
         </collectionProp>
-
       </elementProp>
-
       <stringProp name="TestPlan.user_define_classpath"></stringProp>
-
     </TestPlan>
-
     <hashTree>
-
-      <ThreadGroup guiclass="ThreadGroupGui"
-                   testclass="ThreadGroup"
-                   testname="Single User"
-                   enabled="true">
-
+      <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup" testname="Single User" enabled="true">
         <stringProp name="ThreadGroup.on_sample_error">continue</stringProp>
-
-        <elementProp name="ThreadGroup.main_controller"
-                     elementType="LoopController"
-                     guiclass="LoopControlPanel"
-                     testclass="LoopController"
-                     testname="Loop Controller"
-                     enabled="true">
-
+        <elementProp name="ThreadGroup.main_controller" elementType="LoopController" guiclass="LoopControlPanel" testclass="LoopController" testname="Loop Controller" enabled="true">
           <boolProp name="LoopController.continue_forever">false</boolProp>
-
           <stringProp name="LoopController.loops">1</stringProp>
-
         </elementProp>
-
         <stringProp name="ThreadGroup.num_threads">1</stringProp>
-
         <stringProp name="ThreadGroup.ramp_time">1</stringProp>
-
         <boolProp name="ThreadGroup.scheduler">false</boolProp>
-
         <stringProp name="ThreadGroup.duration"></stringProp>
-
         <stringProp name="ThreadGroup.delay"></stringProp>
-
         <boolProp name="ThreadGroup.same_user_on_next_iteration">true</boolProp>
-
       </ThreadGroup>
-
       <hashTree>
-
-        <HTTPSamplerProxy guiclass="HttpTestSampleGui"
-                          testclass="HTTPSamplerProxy"
-                          testname="Grafana Health Request"
-                          enabled="true">
-
-          <elementProp name="HTTPsampler.Arguments"
-                       elementType="Arguments"
-                       guiclass="HTTPArgumentsPanel"
-                       testclass="Arguments"
-                       testname="HTTP Arguments"
-                       enabled="true">
-
+        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="Grafana Health Request" enabled="true">
+          <elementProp name="HTTPsampler.Arguments" elementType="Arguments" guiclass="HTTPArgumentsPanel" testclass="Arguments" testname="HTTP Arguments" enabled="true">
             <collectionProp name="Arguments.arguments"/>
-
           </elementProp>
-
           <stringProp name="HTTPSampler.domain">${host}</stringProp>
-
           <stringProp name="HTTPSampler.port">${port}</stringProp>
-
           <stringProp name="HTTPSampler.protocol">${protocol}</stringProp>
-
           <stringProp name="HTTPSampler.path">/api/health</stringProp>
-
           <stringProp name="HTTPSampler.method">GET</stringProp>
-
           <boolProp name="HTTPSampler.follow_redirects">true</boolProp>
-
           <boolProp name="HTTPSampler.auto_redirects">false</boolProp>
-
           <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
-
           <boolProp name="HTTPSampler.DO_MULTIPART_POST">false</boolProp>
-
           <stringProp name="HTTPSampler.embedded_url_re"></stringProp>
-
           <stringProp name="HTTPSampler.connect_timeout">5000</stringProp>
-
           <stringProp name="HTTPSampler.response_timeout">10000</stringProp>
-
         </HTTPSamplerProxy>
-
         <hashTree>
-
-          <ResponseAssertion guiclass="AssertionGui"
-                             testclass="ResponseAssertion"
-                             testname="Verify HTTP 200"
-                             enabled="true">
-
+          <ResponseAssertion guiclass="AssertionGui" testclass="ResponseAssertion" testname="Verify HTTP 200" enabled="true">
             <collectionProp name="Asserion.test_strings">
-
-              <stringProp name="200">200</stringProp>
-
+              <stringProp name="49586">200</stringProp>
             </collectionProp>
-
-            <stringProp name="Assertion.custom_message">
-              Grafana health endpoint did not return HTTP 200.
-            </stringProp>
-
-            <stringProp name="Assertion.test_field">
-              Assertion.response_code
-            </stringProp>
-
+            <stringProp name="Assertion.custom_message">Grafana health endpoint did not return HTTP 200.</stringProp>
+            <stringProp name="Assertion.test_field">Assertion.response_code</stringProp>
             <boolProp name="Assertion.assume_success">false</boolProp>
-
             <intProp name="Assertion.test_type">8</intProp>
-
           </ResponseAssertion>
-
-  
+          <hashTree/>
+        </hashTree>
+      </hashTree>
+    </hashTree>
+  </hashTree>
+</jmeterTestPlan>
